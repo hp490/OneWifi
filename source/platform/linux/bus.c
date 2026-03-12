@@ -22,9 +22,70 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 #include "wifi_util.h"
 static wifi_bus_t g_bus;
 static void bus_desc_init(wifi_bus_desc_t *desc);
+
+/* Event callback shim — see event_cb_entry_t in bus.h for details */
+static event_cb_entry_t g_event_cb[MAX_EVENT_CB];
+
+static event_cb_entry_t *find_event_cb(const char *name)
+{
+    for (int i = 0; i < MAX_EVENT_CB; i++) {
+        if (g_event_cb[i].name[0] &&
+            strncmp(g_event_cb[i].name, name, BUS_MAX_NAME_LENGTH) == 0)
+            return &g_event_cb[i];
+    }
+    return NULL;
+}
+
+static bool register_event_cb(const char *name, bus_event_sub_handler_t cb,
+    void *user_data)
+{
+    event_cb_entry_t *free_slot = NULL;
+
+    for (int i = 0; i < MAX_EVENT_CB; i++) {
+        if (g_event_cb[i].name[0]) {
+            if (strncmp(g_event_cb[i].name, name, BUS_MAX_NAME_LENGTH) == 0) {
+                /* existing entry — update in place */
+                g_event_cb[i].cb = cb;
+                g_event_cb[i].user_data = user_data;
+                return true;
+            }
+        } else if (free_slot == NULL) {
+            free_slot = &g_event_cb[i];
+        }
+    }
+
+    if (free_slot == NULL)
+        return false;
+
+    snprintf(free_slot->name, sizeof(free_slot->name), "%s", name);
+    free_slot->cb = cb;
+    free_slot->user_data = user_data;
+    return true;
+}
+
+static he_bus_error_t event_receive_handler(char *event_name,
+    he_bus_raw_data_t *raw, void *userData)
+{
+    event_cb_entry_t *e = find_event_cb(event_name);
+    if (e == NULL || e->cb == NULL) {
+        wifi_util_error_print(WIFI_BUS, "%s:%d No callback for event: %s\n",
+            __func__, __LINE__, event_name ? event_name : "(null)");
+        return he_bus_error_general;
+    }
+
+    bus_data_prop_t prop = { 0 };
+    if (raw != NULL) {
+        prop.value = *(raw_data_t *)raw;
+        prop.is_data_set = true;
+    }
+
+    e->cb(event_name, &prop, e->user_data);
+    return he_bus_error_success;
+}
 
 /* Function pointer address return */
 wifi_bus_desc_t *get_bus_descriptor(void)
@@ -293,11 +354,16 @@ bus_error_t bus_event_subscribe(bus_handle_t *handle, char const *event_name, vo
     VERIFY_NULL_WITH_RC(event_name);
     VERIFY_NULL_WITH_RC(cb);
 
-    he_bus_error_t rc;
     he_bus_handle_t p_bus_handle = handle->u.he_bus_handle;
-    he_bus_event_consumer_sub_handler_t p_bus_cb = (he_bus_event_consumer_sub_handler_t )cb;
 
-    rc = he_bus_event_sub(p_bus_handle, event_name, p_bus_cb, (uint32_t)timeout);
+    if (!register_event_cb(event_name, (bus_event_sub_handler_t)cb, userData)) {
+        wifi_util_error_print(WIFI_BUS, "%s:%d: callback table full for: %s\n",
+            __func__, __LINE__, event_name);
+        return bus_error_out_of_resources;
+    }
+
+    he_bus_error_t rc = he_bus_event_sub(p_bus_handle, event_name,
+        event_receive_handler, (uint32_t)timeout);
 
     return (bus_error_t)rc;
 }
@@ -307,27 +373,27 @@ bus_error_t bus_event_subscribe_ex(bus_handle_t *handle, bus_event_sub_t *l_sub_
     VERIFY_NULL_WITH_RC(handle);
     VERIFY_NULL_WITH_RC(l_sub_info_map);
 
-    he_bus_error_t rc;
     he_bus_handle_t p_bus_handle = handle->u.he_bus_handle;
-    he_bus_event_sub_t  *p_sub_data_map;
-
-    p_sub_data_map = calloc(1, num_of_sub * sizeof(he_bus_event_sub_t));
+    he_bus_event_sub_t *p_sub_data_map = calloc(num_of_sub, sizeof(he_bus_event_sub_t));
     if (p_sub_data_map == NULL) {
-        wifi_util_error_print(WIFI_BUS,"%s:%d bus_event_sub_ex() calloc is failed:%d\n", __func__, __LINE__, num_of_sub);
+        wifi_util_error_print(WIFI_BUS, "%s:%d calloc failed:%d\n", __func__, __LINE__, num_of_sub);
         return bus_error_out_of_resources;
     }
 
     for (uint32_t index = 0; index < num_of_sub; index++) {
-
         p_sub_data_map[index].event_name = l_sub_info_map[index].event_name;
         p_sub_data_map[index].action     = he_bus_event_action_subscribe;
         p_sub_data_map[index].interval   = l_sub_info_map[index].interval;
-        p_sub_data_map[index].handler.sub_handler = l_sub_info_map[index].handler;
-        p_sub_data_map[index].handler.sub_ex_async_handler = (he_bus_event_sub_ex_async_handler_t)l_sub_info_map[index].async_handler;
-
+        if (l_sub_info_map[index].handler != NULL) {
+            register_event_cb(l_sub_info_map[index].event_name, l_sub_info_map[index].handler, NULL);
+            p_sub_data_map[index].handler.sub_handler =
+                (he_bus_event_consumer_sub_handler_t)event_receive_handler;
+        }
+        p_sub_data_map[index].handler.sub_ex_async_handler =
+            (he_bus_event_sub_ex_async_handler_t)l_sub_info_map[index].async_handler;
     }
 
-    rc = he_bus_event_sub_ex(p_bus_handle, p_sub_data_map, num_of_sub, (uint32_t)timeout);
+    he_bus_error_t rc = he_bus_event_sub_ex(p_bus_handle, p_sub_data_map, num_of_sub, (uint32_t)timeout);
 
     free(p_sub_data_map);
     return (bus_error_t)rc;
@@ -338,27 +404,28 @@ bus_error_t bus_event_subscribe_ex_async(bus_handle_t *handle, bus_event_sub_t *
     VERIFY_NULL_WITH_RC(handle);
     VERIFY_NULL_WITH_RC(l_sub_info_map);
 
-    he_bus_error_t rc;
     he_bus_handle_t p_bus_handle = handle->u.he_bus_handle;
-    he_bus_event_sub_t  *p_sub_data_map;
-
-    p_sub_data_map = calloc(1, num_of_sub * sizeof(he_bus_event_sub_t));
+    he_bus_event_sub_t *p_sub_data_map = calloc(num_of_sub, sizeof(he_bus_event_sub_t));
     if (p_sub_data_map == NULL) {
-        wifi_util_error_print(WIFI_BUS,"%s:%d bus_event_sub_ex() calloc is failed:%d\n", __func__, __LINE__, num_of_sub);
+        wifi_util_error_print(WIFI_BUS, "%s:%d calloc failed:%d\n", __func__, __LINE__, num_of_sub);
         return bus_error_out_of_resources;
     }
 
     for (uint32_t index = 0; index < num_of_sub; index++) {
-
         p_sub_data_map[index].event_name = l_sub_info_map[index].event_name;
         p_sub_data_map[index].action     = he_bus_event_action_subscribe;
         p_sub_data_map[index].interval   = l_sub_info_map[index].interval;
-        p_sub_data_map[index].handler.sub_handler = l_sub_info_map[index].handler;
-        p_sub_data_map[index].handler.sub_ex_async_handler = (he_bus_event_sub_ex_async_handler_t)l_sub_info_map[index].async_handler;
-
+        if (l_sub_info_map[index].handler != NULL) {
+            register_event_cb(l_sub_info_map[index].event_name, l_sub_info_map[index].handler, NULL);
+            p_sub_data_map[index].handler.sub_handler =
+                (he_bus_event_consumer_sub_handler_t)event_receive_handler;
+        }
+        p_sub_data_map[index].handler.sub_ex_async_handler =
+            (he_bus_event_sub_ex_async_handler_t)l_sub_info_map[index].async_handler;
     }
 
-    rc = he_bus_event_sub_ex_async(p_bus_handle, p_sub_data_map, num_of_sub, l_sub_handler, (uint32_t)timeout);
+    he_bus_error_t rc = he_bus_event_sub_ex_async(p_bus_handle, p_sub_data_map,
+        num_of_sub, l_sub_handler, (uint32_t)timeout);
 
     free(p_sub_data_map);
     return (bus_error_t)rc;

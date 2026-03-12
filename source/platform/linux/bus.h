@@ -41,6 +41,20 @@ typedef struct {
     wifi_bus_desc_t  desc;
 } wifi_bus_t;
 
+/*
+ * Event callback shim: he_bus delivers he_bus_raw_data_t* but bus_common.h
+ * callbacks expect bus_data_prop_t* (different struct layout). The shim in
+ * bus.c stores real callbacks in an event_cb_entry_t table and routes all
+ * he_bus events through a wrapper that builds a proper bus_data_prop_t.
+ */
+#define MAX_EVENT_CB 64
+
+typedef struct {
+    char name[BUS_MAX_NAME_LENGTH]; /* empty name[0] == unused slot */
+    bus_event_sub_handler_t cb;
+    void *user_data;
+} event_cb_entry_t;
+
 wifi_bus_desc_t *get_bus_descriptor();
 bus_error_t bus_init(bus_handle_t *handle);
 
