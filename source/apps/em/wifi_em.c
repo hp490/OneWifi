@@ -3879,12 +3879,12 @@ int em_init(wifi_app_t *app, unsigned int create_flag)
         { WIFI_EM_CLIENT_ASSOC_CTRL_REQ, bus_element_type_method,
             { NULL, cacr_set_client_acl_rules, NULL, NULL, NULL, NULL }, slow_speed, ZERO_TABLE,
             { bus_data_type_string, true, 0, 0, 0, NULL } },
-        { WIFI_WEBCONFIG_SET_UNASSOC_STA, bus_element_type_method,
+       /* { WIFI_WEBCONFIG_SET_UNASSOC_STA, bus_element_type_method,
             { NULL, webconfig_dummy, NULL, NULL, NULL, NULL }, slow_speed, ZERO_TABLE,
             { bus_data_type_bytes, true, 0, 0, 0, NULL } },
         { WIFI_EM_UNASSOC_STA_LINK_METRICS_RESP, bus_element_type_method,
             { NULL, NULL, NULL, NULL, NULL, NULL }, slow_speed, ZERO_TABLE,
-            { bus_data_type_string, false, 0, 0, 0, NULL } },
+            { bus_data_type_string, false, 0, 0, 0, NULL } }, */
         { WIFI_EM_FAILED_CONNECTION, bus_element_type_event,
             { NULL, NULL, NULL, NULL, NULL, NULL }, slow_speed, ZERO_TABLE,
             { bus_data_type_string, false, 0, 0, 0, NULL } }
