@@ -181,11 +181,17 @@ typedef struct {
 } vap_acl_state_t;
 
 typedef struct kick_details {
+    struct kick_details *next;
     char *kick_list;
     int vap_index;
     int timer_id;
-    bool cancelled_by_unblock;
+    unsigned short period;
+    bool is_whitelist;
 }kick_details_t;
+
+#ifdef EM_APP
+void em_restore_bh_whitelist(int vap_index);
+#endif
 
 typedef struct {
     struct timespec start_time;

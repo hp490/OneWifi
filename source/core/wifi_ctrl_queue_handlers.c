@@ -1248,6 +1248,12 @@ bool is_mac_greylisted(int vap_index, char *mac_str)
 static int initiate_kick_config_change(int vap_index, wifi_vap_info_t *vap_info,
     rdk_wifi_vap_info_t *rdk_vap_info)
 {
+#ifdef EM_APP
+    /* The HAL forces a whitelist here and the controller owns it, whatever the stored config says */
+    if (isVapMeshBackhaul((UINT)vap_index)) {
+        return RETURN_OK;
+    }
+#endif
     if (vap_info->u.bss_info.mac_filter_enable == FALSE) {
 #ifdef NL80211_ACL
         if (wifi_hal_setApMacAddressControlMode(vap_index, 2) == RETURN_OK) {
@@ -1310,6 +1316,19 @@ static int handle_acl_operation(int vap_index, char *mac_str, wifi_vap_info_t *v
     rdk_wifi_vap_info_t *rdk_vap_info, bool is_add_operation)
 {
     bool success = false;
+
+#ifdef EM_APP
+    /* A kick only disconnects here: the allow list belongs to the controller */
+    if (isVapMeshBackhaul((UINT)vap_index)) {
+        mac_address_t kick_mac;
+
+        if (is_add_operation) {
+            str_to_mac_bytes(mac_str, kick_mac);
+            wifi_hal_disassoc(vap_index, WIFI_REASON_UNSPECIFIED, kick_mac);
+        }
+        return RETURN_OK;
+    }
+#endif
 
     // For delete operations, check if MAC is greylisted
     if (!is_add_operation && is_greylist_enabled(vap_index) &&

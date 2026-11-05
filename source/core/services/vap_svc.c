@@ -125,6 +125,13 @@ int update_acl_entries(wifi_vap_info_map_t *tgt_vap_map)
         vap_index = tgt_vap_map->vap_array[i].vap_index;
 #ifdef NL80211_ACL
         wifi_hal_delApAclDevices(vap_index);
+#ifdef EM_APP
+        em_restore_bh_whitelist(vap_index);
+        /* The controller owns this list; a stored entry could undo its BLOCK */
+        if (isVapMeshBackhaul((UINT)vap_index)) {
+            continue;
+        }
+#endif
 #else
         wifi_delApAclDevices(vap_index);
 #endif

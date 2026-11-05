@@ -2095,7 +2095,10 @@ int webconfig_hal_mac_filter_apply(wifi_ctrl_t *ctrl, webconfig_subdoc_decoded_d
                 }
             } else {
 #ifdef NL80211_ACL
-                wifi_hal_delApAclDevices(vap_index);
+                wifi_hal_delApAclDevices(current_config->vap_index);
+#ifdef EM_APP
+                em_restore_bh_whitelist(current_config->vap_index);
+#endif
 #else
         wifi_delApAclDevices(vap_index);
 #endif
